@@ -1,5 +1,5 @@
 #include "vga.hpp"
-#include "kernel/memory/physical/MB2MMap.hpp"
+#include "boot/loaders/Multiboot2.hpp"
 #include <stddef.h>
 #include <stdint.h>
 

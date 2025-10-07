@@ -1,28 +1,10 @@
-#include "Runtime/mem.h"
+#include "boot/loaders/Multiboot2.hpp"
+#include "kernel/memory/physical/MemoryManager.hpp"
+#include "keyboard.hpp"
+#include "runtime/mem.hpp"
+#include "vga.hpp"
 #include <stddef.h>
 #include <stdint.h>
-extern "C" void *
-kmalloc(size_t n) {             // trivial bump allocator from a static pool
-  static uint8_t heap[1 << 20]; // 1 MiB
-  static size_t off = 0;
-  if (off + n > sizeof(heap))
-    return nullptr;
-  void *p = heap + off;
-  off += (n + 15) & ~size_t(15);
-  return p;
-}
-
-// minimal operator new/delete to satisfy C++
-void *operator new(size_t n) {
-  void *kmalloc(size_t);
-  return kmalloc(n);
-}
-void operator delete(void *) noexcept {}
-void operator delete(void *p, size_t) noexcept { /* kfree(p); */ }
-
-#include "kernel/memory/physical/MB2MMap.hpp"
-#include "keyboard.hpp"
-#include "vga.hpp"
 
 // ---- лог-помощники ----
 namespace log {
@@ -307,4 +289,6 @@ extern "C" void kmain(uint32_t magic, uint32_t mb_info_phys) {
   vga::write(" bytes (");
   log::write_dec(total_available_bytes >> 20);
   vga::write(" MiB)\n");
+
+  kernel_name::memory::physical::Manager::instance().fromMB2(mb_info_phys);
 }

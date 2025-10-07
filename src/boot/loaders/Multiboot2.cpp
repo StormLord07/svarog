@@ -1,4 +1,4 @@
-#include <kernel/memory/physical/MB2MMap.hpp>
+#include "boot/loaders/Multiboot2.hpp"
 
 namespace kernel_name::memory::physical::multiboot2 {
 

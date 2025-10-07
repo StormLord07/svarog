@@ -18,7 +18,9 @@ set(SRCS
   src/kernel.cpp
   src/keyboard.cpp
   src/vga.cpp
-  src/kernel/memory/physical/MB2MMap.cpp
+  src/boot/loaders/Multiboot2.cpp
+  src/runtime/mem.cpp
+  src/runtime/cxx_shim.cpp
   boot/boot.S
 )
 
@@ -83,6 +85,13 @@ find_program(QEMU qemu-system-i386)
 if(QEMU)
   add_custom_target(run
     COMMAND ${QEMU} -cdrom ${ISOFILE} -serial mon:stdio -m 16000
+    DEPENDS iso
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    VERBATIM
+  )
+
+  add_custom_target(run2G
+    COMMAND ${QEMU} -cdrom ${ISOFILE} -serial mon:stdio -m 2000
     DEPENDS iso
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     VERBATIM

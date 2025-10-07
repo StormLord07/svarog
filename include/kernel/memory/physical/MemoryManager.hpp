@@ -1,5 +1,5 @@
 #pragma once
-#include "kernel/memory/physical/MB2MMap.hpp"
+#include "boot/loaders/Multiboot2.hpp"
 #include <cstddef>
 #include <cstdint>
 
