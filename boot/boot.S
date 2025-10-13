@@ -11,7 +11,16 @@ mb2_header:
     .long mb2_header_end - mb2_header
     .long -(0xE85250D6 + 0 + (mb2_header_end - mb2_header))  /* checksum */
 
+    /* --- request: framebuffer (type=5) --- */
+    .align 8
+    .long 5                     /* type = 5 (framebuffer request) */
+    .long 20                    /* size = 20 bytes */
+    .long 1920                  /* preferred width  (GRUB может дать ближайшее) */
+    .long 1080                  /* preferred height */
+    .long 32                    /* preferred bpp = 32 (ARGB/RGBX) */
+
     /* required end tag */
+    .align 8
     .short 0                    /* type = 0 (end) */
     .short 0
     .long 8

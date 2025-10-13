@@ -2,8 +2,8 @@
 ENTRY(_start)
 
 SECTIONS {
-  . = 1M;
-
+  . = 2M;
+  _kernel_start = .;
   .multiboot : {
     KEEP(*(.multiboot))
   }
@@ -16,4 +16,5 @@ SECTIONS {
   .rodata : ALIGN(4K) { *(.rodata*) }
   .data   : ALIGN(4K) { *(.data*)   }
   .bss    : ALIGN(4K) { *(.bss*)    *(COMMON) }
+  _kernel_end = .;
 }

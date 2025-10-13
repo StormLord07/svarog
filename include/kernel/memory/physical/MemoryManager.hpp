@@ -5,6 +5,24 @@
 
 namespace kernel_name::memory::physical {
 
+enum MMIO_FLAGS : uint32_t {
+  MMIO_READ = 1 << 0,
+  MMIO_WRITE = 1 << 1,
+  MMIO_PREFETCH = 1 << 2,
+  MMIO_CACHEABLE = 1 << 3,
+  MMIO_MMCONFIG = 1 << 4, // PCIe config space window
+};
+
+// Generic MMIO struct
+struct MMIO {
+  // std::string name; // We'd need to load libc++ for that
+  std::uintptr_t start;
+  std::size_t size;
+  // std::string type; // We'd need to load libc++ for that, that is a
+  // enforcement policy
+  uint32_t flags;
+};
+
 enum class TYPE : uint32_t {
   FREE = 1,
   RESERVER = 2,

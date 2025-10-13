@@ -79,6 +79,226 @@ inline void write_cstr_bounded(const char *s, size_t max_bytes) {
 
 } // namespace log
 
+// Linker-provided kernel bounds (define in linker.ld)
+extern "C" char _kernel_start, _kernel_end;
+
+extern "C" {
+// simple portable unsigned 64-bit divide/mod helpers
+static inline uint64_t udiv64(uint64_t n, uint64_t d, uint64_t *rem_out) {
+  if (d == 0) {
+    if (rem_out)
+      *rem_out = 0;
+    return ~uint64_t(0);
+  }
+  uint64_t q = 0, r = 0;
+  for (int i = 63; i >= 0; --i) {
+    r = (r << 1) | ((n >> i) & 1);
+    if (r >= d) {
+      r -= d;
+      q |= (uint64_t(1) << i);
+    }
+  }
+  if (rem_out)
+    *rem_out = r;
+  return q;
+}
+
+// GCC/Clang expect these exact unmangled names
+uint64_t __udivdi3(uint64_t n, uint64_t d) {
+  uint64_t r;
+  return udiv64(n, d, &r);
+}
+
+uint64_t __umoddi3(uint64_t n, uint64_t d) {
+  uint64_t r;
+  (void)udiv64(n, d, &r);
+  return r;
+}
+}
+using namespace kernel_name::memory::physical::multiboot2;
+
+struct Range {
+  uint64_t lo, hi;
+  char tag;
+};
+static inline bool in_range(uint64_t a, const Range &r) {
+  return a >= r.lo && a < r.hi;
+}
+
+static inline uint32_t mmap_type_at(const Info *info, uint64_t pos) {
+  const TagMMap *mm = nullptr;
+  for (const Tag &t : *info) {
+    if (t.type == TYPE::MB2_TAG_MMAP) {
+      mm = (const TagMMap *)&t;
+      break;
+    }
+  }
+  if (!mm)
+    return 2;
+  for (const MMapEntry &e : *mm) {
+    if (pos >= e.addr && pos < e.addr + e.len)
+      return e.type;
+  }
+  return 2;
+}
+
+static inline uint64_t fb_size_bytes(const TagFramebuffer *fb) {
+  return fb ? (uint64_t)fb->pitch * fb->height : 0;
+}
+
+extern "C" char _kernel_start, _kernel_end;
+static unsigned collect_specials(const Info *info, Range *out, unsigned cap) {
+  unsigned n = 0;
+  if (n < cap)
+    out[n++] = Range{(uint64_t)(uintptr_t)&_kernel_start,
+                     (uint64_t)(uintptr_t)&_kernel_end, 'K'};
+
+  if (n < cap) {
+    const uint64_t mb2_lo = (uint64_t)(uintptr_t)info;
+    const uint64_t mb2_hi = mb2_lo + info->total_size;
+    out[n++] = Range{mb2_lo, mb2_hi, 'B'};
+  }
+
+  const TagFramebuffer *fb_tag = nullptr;
+  for (const Tag &t : *info) {
+    if (t.type == TYPE::MB2_TAG_END)
+      break;
+    if (t.type == TYPE::MB2_TAG_MODULE) {
+      const auto *m = (const TagModule *)&t;
+      if (n < cap)
+        out[n++] = Range{m->mod_start, m->mod_end, 'M'};
+    } else if (t.type == TYPE::MB2_TAG_FRAMEBUFFER) {
+      fb_tag = (const TagFramebuffer *)&t;
+    }
+  }
+  if (fb_tag && fb_tag->addr) {
+    const uint64_t fbl = fb_tag->addr;
+    const uint64_t fbh = fbl + fb_size_bytes(fb_tag);
+    if (fbh > fbl && n < cap)
+      out[n++] = Range{fbl, fbh, 'F'};
+  }
+  return n;
+}
+
+// Fills out[0..cols-1] with classes and overlays specials; no per-column 64-bit
+// div.
+static void render_slice_bar(const Info *info, uint64_t lo, uint64_t step,
+                             unsigned cols, const Range *sp, unsigned spn,
+                             char *out /*>=cols+1*/) {
+  uint64_t pos = lo;
+  const uint64_t q = step / cols;
+  const uint64_t r = step % cols;
+  uint64_t err = 0;
+
+  for (unsigned i = 0; i < cols; ++i) {
+    char ch;
+    const uint32_t ty = mmap_type_at(info, pos);
+    switch (ty) {
+    case 1:
+      ch = 'U';
+      break; // usable
+    case 2:
+      ch = 'R';
+      break; // reserved
+    case 3:
+      ch = 'A';
+      break; // acpi reclaim
+    case 4:
+      ch = 'N';
+      break; // acpi nvs
+    case 5:
+      ch = 'X';
+      break; // bad
+    default:
+      ch = '?';
+      break; // other/unknown
+    }
+    // overlay specials if any
+    for (unsigned j = 0; j < spn; ++j) {
+      if (in_range(pos, sp[j])) {
+        ch = sp[j].tag;
+        break;
+      }
+    }
+    out[i] = ch;
+
+    pos += q;
+    err += r;
+    if (err >= cols) {
+      pos += 1;
+      err -= cols;
+    }
+  }
+  out[cols] = '\0';
+}
+
+static void animate_mem_bar_basic(const Info *info) {
+  constexpr uint64_t MiB = 1024ull * 1024;
+  constexpr uint64_t GiB = 1024ull * MiB;
+  const uint64_t total = 16 * GiB;
+  const uint64_t step = 64 * MiB;
+
+  // Reserve a line for the bar: print legend ONCE, then remember Y.
+  vga::write("Legend: U=Usable R=Reserved A=ACPIrec N=ACPINVS X=Bad K=Kernel "
+             "B=MB2 M=Module F=FB\n");
+
+  const uint16_t W = vga::width();
+  const unsigned cols =
+      (W > 20 ? W - 20 : (W ? W - 1 : 1)); // leave room for header
+  if (cols < 8)
+    return;
+
+  // capture the y line to reuse
+  const uint16_t bar_y = vga::y();
+  // ensure we have a clean line
+  vga::move_cursor(0, bar_y);
+  for (uint16_t i = 0; i < W; ++i)
+    vga::write(" ");
+
+  Range specials[64];
+  const unsigned spn = collect_specials(info, specials, 64);
+
+  // reusable buffers
+  // header ~ 20 chars, bar = cols, plus pad
+  char bar[512]; // enough for typical VGA widths
+  char header[64];
+
+  for (uint64_t lo = 0; lo < total; lo += step) {
+    const uint64_t hi = lo + step;
+
+    // construct header: "Phys 0xXXXXXXXXXXXXXXX..0xYYYYYYYYYYYYYYYY : "
+    // keep it stable length (pad later)
+    vga::move_cursor(0, bar_y);
+
+    // write header in-place
+    vga::write("Phys ");
+    log::write_hex64(lo);
+    vga::write(" .. ");
+    log::write_hex64(hi);
+    vga::write(" : ");
+
+    render_slice_bar(info, lo, step, cols, specials, spn, bar);
+    vga::write(bar);
+
+    // pad to erase leftovers up to full width, then return carriage
+    uint16_t printed =
+        6 /*Phys ␣*/ + 2 /* .. */ + 3 /* ␣: ␣ */ + 16 + 16 /*hexes*/ + cols;
+    if (printed < W) {
+      for (uint16_t i = 0; i < (W - printed); ++i)
+        vga::write(" ");
+    }
+    vga::write("\r"); // back to column 0 on same bar_y
+
+    // tiny delay; replace with a proper timer later
+    for (volatile int i = 0; i < 400000; ++i) {
+      __asm__ __volatile__("pause");
+    }
+  }
+
+  // move cursor to next line once done (optional)
+  vga::move_cursor(0, (uint16_t)(bar_y + 1));
+}
+
 // имя типа тега
 static const char *
 tag_type_name(kernel_name::memory::physical::multiboot2::TYPE t) {
@@ -102,6 +322,8 @@ tag_type_name(kernel_name::memory::physical::multiboot2::TYPE t) {
     return "ACPI_OLD";
   case T::MB2_TAG_ACPI_NEW:
     return "ACPI_NEW";
+  case T::MB2_TAG_FRAMEBUFFER:
+    return "FRAMEBUFFER";
   default:
     return "UNKNOWN";
   }
@@ -273,6 +495,10 @@ extern "C" void kmain(uint32_t magic, uint32_t mb_info_phys) {
       // грубая печать в MiB
       log::write_dec(total_available_bytes >> 20);
       vga::write(" MiB)\n");
+      break;
+    }
+    case TYPE::MB2_TAG_FRAMEBUFFER: {
+      vga::write("  (no parser for this tag yet)\n");
       break;
     }
     default:
