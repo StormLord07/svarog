@@ -4,7 +4,6 @@
 #include <stdint.h>
 
 // ---- внешний шрифт 8x16 (моноширинный, 256 символов) ----
-// Объяви где-нибудь: `const uint8_t font8x16[256][16] = {...};`
 static const uint8_t font8x16[256][16] = {
     {
         0x00,
@@ -2654,5 +2653,6 @@ void write(const char *s) {
     put(*s++);
 }
 void move_cursor(uint16_t X, uint16_t Y) { set_xy(X, Y); }
+
 
 } // namespace vga
